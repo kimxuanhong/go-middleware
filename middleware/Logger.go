@@ -1,72 +1,67 @@
 package middleware
 
 import (
-	"bytes"
-	"encoding/json"
-	"github.com/gin-gonic/gin"
-	"log"
-	"time"
+	"context"
+	"fmt"
+	"github.com/kimxuanhong/go-logger/logger"
 )
 
-type LogEntry struct {
-	Timestamp   time.Time
-	StatusCode  int
-	Method      string
-	Path        string
-	Request     string
-	Response    string
-	ProcessTime time.Duration
+// Logger interface defines the logging methods
+type Logger interface {
+	LogRequest(entry LogEntry)
+	LogResponse(entry LogEntry)
+	LogError(requestID string, err error)
 }
 
-var LogReqChannel = make(chan LogEntry, 100)
-var LogResChannel = make(chan LogEntry, 100)
-
-func OnStopServer() {
-	close(LogReqChannel)
-	close(LogResChannel)
+// DefaultLogger implements Logger interface using standard log package
+type DefaultLogger struct {
+	logger logger.Logger
 }
 
-func LogWorker() {
-	go func() {
-		for entry := range LogReqChannel {
-			log.Printf("[%s] %s %s - %d in %v,\nRequest: %s \n",
-				entry.Timestamp.Format(time.RFC3339),
-				entry.Method, entry.Path,
-				entry.StatusCode,
-				entry.ProcessTime,
-				compactJSON(entry.Request),
-			)
-		}
-	}()
-
-	go func() {
-		for entry := range LogResChannel {
-			log.Printf("[%s] %s %s - %d in %v,\nResponse: %s\n",
-				entry.Timestamp.Format(time.RFC3339),
-				entry.Method, entry.Path,
-				entry.StatusCode,
-				entry.ProcessTime,
-				compactJSON(entry.Response),
-			)
-		}
-	}()
-}
-
-type ResponseWriter struct {
-	gin.ResponseWriter
-	body *bytes.Buffer
-}
-
-func (w *ResponseWriter) Write(b []byte) (int, error) {
-	w.body.Write(b)
-	return w.ResponseWriter.Write(b)
-}
-
-func compactJSON(data string) string {
-	var compactedJSON bytes.Buffer
-	err := json.Compact(&compactedJSON, []byte(data))
-	if err != nil {
-		return data
+// NewDefaultLogger creates a new DefaultLogger
+func NewDefaultLogger() *DefaultLogger {
+	return &DefaultLogger{
+		logger: logger.DefaultLogger(),
 	}
-	return compactedJSON.String()
+}
+
+// NewLogger creates a new NewLogger
+func NewLogger(config *logger.Config) *DefaultLogger {
+	return &DefaultLogger{
+		logger: logger.NewLogger(config),
+	}
+}
+
+// LogRequest implements Logger interface for DefaultLogger
+func (l *DefaultLogger) LogRequest(entry LogEntry) {
+	message := fmt.Sprintf("%s %s - %d in %v\nClientIP: %s, UserAgent: %s\nRequest: %s\n",
+		entry.Method, entry.Path,
+		entry.StatusCode,
+		formatDuration(entry.ProcessTime),
+		entry.ClientIP,
+		entry.UserAgent,
+		compactJSON(entry.Request),
+	)
+	ctx := context.WithValue(context.Background(), logger.RequestIDKey, entry.RequestID)
+	l.logger.WithContext(ctx).Info(message)
+}
+
+// LogResponse implements Logger interface for DefaultLogger
+func (l *DefaultLogger) LogResponse(entry LogEntry) {
+	message := fmt.Sprintf("%s %s - %d in %v\nClientIP: %s, UserAgent: %s\nResponse: %s\n",
+		entry.Method, entry.Path,
+		entry.StatusCode,
+		formatDuration(entry.ProcessTime),
+		entry.ClientIP,
+		entry.UserAgent,
+		compactJSON(entry.Response),
+	)
+	ctx := context.WithValue(context.Background(), logger.RequestIDKey, entry.RequestID)
+	l.logger.WithContext(ctx).Info("[REQUEST] %v", message)
+}
+
+// LogError implements Logger interface for DefaultLogger
+func (l *DefaultLogger) LogError(requestID string, err error) {
+	ctx := context.WithValue(context.Background(), logger.RequestIDKey, requestID)
+	l.logger.WithContext(ctx).Error("[ERROR] %v", err)
 }
