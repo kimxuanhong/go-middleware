@@ -1,3 +1,26 @@
+// Package middleware cung cấp các middleware cho Gin framework
+// bao gồm logging, recovery, và thống kê metrics.
+//
+// # Cách sử dụng:
+//
+//	import (
+//	    "github.com/gin-gonic/gin"
+//	    "github.com/your-module/middleware"
+//	)
+//
+//	func main() {
+//	    r := gin.Default()
+//
+//	    r.Use(middleware.RecoveryMiddleware())
+//	    r.Use(middleware.LogRequestMiddleware())
+//	    r.Use(middleware.LogResponseMiddleware())
+//
+//	    r.GET("/ping", func(c *gin.Context) {
+//	        c.JSON(200, gin.H{"message": "pong"})
+//	    })
+//
+//	    r.Run()
+//	}
 package middleware
 
 import (
@@ -19,26 +42,34 @@ var (
 	metrics              = NewMetrics()
 )
 
-// SetLogger sets the logger to use for middleware
+// SetLogger cho phép thay thế logger mặc định.
+//
+// logger: một struct implement interface Logger.
 func SetLogger(logger Logger) {
 	defaultLogger = logger
 }
 
-// LogEntry represents a log entry for both request and response
-type LogEntry struct {
-	StatusCode  int
-	Method      string
-	Path        string
-	Request     string
-	Response    string
-	ProcessTime time.Duration
-	ClientIP    string
-	UserAgent   string
-	RequestID   string
-	Error       string
+// GetMetrics trả về con trỏ đến struct Metrics toàn cục
+// chứa các thông tin thống kê hiện tại của hệ thống.
+func GetMetrics() *Metrics {
+	return metrics
 }
 
-// ResponseWriter is a custom response writer that captures the response body
+// LogEntry đại diện cho một entry log gồm request/response
+type LogEntry struct {
+	StatusCode  int           // HTTP status code
+	Method      string        // HTTP method
+	Path        string        // URL path
+	Request     string        // Request body (JSON, nếu có)
+	Response    string        // Response body (JSON, nếu có)
+	ProcessTime time.Duration // Thời gian xử lý request
+	ClientIP    string        // Địa chỉ IP của client
+	UserAgent   string        // User agent string
+	RequestID   string        // UUID của request
+	Error       string        // Error nếu có panic
+}
+
+// ResponseWriter là wrapper cho gin.ResponseWriter để ghi lại response body
 type ResponseWriter struct {
 	gin.ResponseWriter
 	body        *bytes.Buffer
@@ -46,16 +77,16 @@ type ResponseWriter struct {
 	wroteHeader bool
 }
 
-// Write implements the io.Writer interface
+// Write ghi dữ liệu vào buffer và sau đó xuống response writer gốc
 func (w *ResponseWriter) Write(b []byte) (int, error) {
 	if !w.wroteHeader {
-		w.WriteHeader(200) // default status code
+		w.WriteHeader(200)
 	}
 	w.body.Write(b)
 	return w.ResponseWriter.Write(b)
 }
 
-// WriteHeader implements the http.ResponseWriter interface
+// WriteHeader lưu status code và chỉ ghi một lần duy nhất
 func (w *ResponseWriter) WriteHeader(code int) {
 	if !w.wroteHeader {
 		w.statusCode = code
@@ -64,7 +95,8 @@ func (w *ResponseWriter) WriteHeader(code int) {
 	}
 }
 
-// RecoveryMiddleware handles panic recovery
+// RecoveryMiddleware trả về middleware dùng để recover panic
+// và log lỗi ra hệ thống đồng thời trả về lỗi HTTP 500
 func RecoveryMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		safe.SafeGo(func(ex error) {
@@ -88,7 +120,7 @@ func RecoveryMiddleware() gin.HandlerFunc {
 	}
 }
 
-// LogRequestMiddleware logs incoming requests
+// LogRequestMiddleware trả về middleware để log thông tin request đầu vào
 func LogRequestMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -118,7 +150,8 @@ func LogRequestMiddleware() gin.HandlerFunc {
 	}
 }
 
-// LogResponseMiddleware logs outgoing responses
+// LogResponseMiddleware trả về middleware để log thông tin response đầu ra
+// và ghi nhận các metrics liên quan đến request.
 func LogResponseMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := c.GetTime("startTime")
@@ -149,18 +182,19 @@ func LogResponseMiddleware() gin.HandlerFunc {
 		}
 		defaultLogger.LogResponse(entryRes)
 
-		// Record metrics
+		// Ghi lại metrics
 		atomic.AddUint64(&metrics.TotalRequests, 1)
 		atomic.AddUint64(&metrics.TotalDuration, uint64(duration.Milliseconds()))
 		metrics.RecordRequest(c.Request.Method, bodyWriter.statusCode, duration)
 	}
 }
 
-// Helper functions
+// isMultipartForm kiểm tra xem content-type có phải multipart form
 func isMultipartForm(contentType string) bool {
 	return strings.HasPrefix(contentType, "multipart/form-data")
 }
 
+// compactJSON nhận chuỗi JSON và loại bỏ các khoảng trắng không cần thiết
 func compactJSON(data string) string {
 	if data == "" {
 		return ""
@@ -173,6 +207,7 @@ func compactJSON(data string) string {
 	return compactedJSON.String()
 }
 
+// formatDuration định dạng duration thành chuỗi "x.xxms"
 func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%.2fms", float64(d.Microseconds())/1000.0)
 }
